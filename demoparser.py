@@ -1,0 +1,613 @@
+import struct, sys, csgo
+import cstrike15_usermessages_public_pb2 as protocs
+import netmessages_public_pb2 as protonet
+#------------------------------
+#    Options
+#------------------------------
+
+PRINT_DATATABLE = False
+SIMPLIFY_TICK   = True
+SIMPLIFY_SOUND  = True
+SIMPLIFY_EVENT  = True
+SIMPLIFY_DATA   = True
+
+#------------------------------
+#    Demo & file variables
+#------------------------------
+
+FILE_BUFFER_POS  = 0       # Position in input file
+DEMO_FINISHED    = False   # Has demo finished?
+
+DEMO_TICK        = 0       # Tick right now
+DEMO_CMD         = 0       # Command parsed right now
+DEMO_PLAYER_SLOT = 0       # Player slot
+
+#------------------------------
+#    Open input and output file
+#------------------------------
+
+inFile  = open("test.dem", "rb")
+outFile = open("output.txt", "w")
+
+#------------------------------
+#    Read from input file
+#------------------------------
+
+# Return bytes
+def bread(a_Nbytes):
+    global FILE_BUFFER_POS
+    val = inFile.read(a_Nbytes)
+    FILE_BUFFER_POS += a_Nbytes
+    return val
+
+# Return int
+def bread_int(a_Nbytes):
+    global FILE_BUFFER_POS
+    val = inFile.read(a_Nbytes)
+    FILE_BUFFER_POS += a_Nbytes
+    return int.from_bytes(val, byteorder="little")
+
+# Return float
+def bread_float(a_Nbytes):
+    global FILE_BUFFER_POS
+    val = inFile.read(a_Nbytes)
+    FILE_BUFFER_POS += a_Nbytes
+    return struct.unpack('f', val)[0]
+
+#------------------------------
+#    Read headers
+#------------------------------
+
+# Read sequance info [seems no use?]
+def readSequenceInfo():
+    int1 = bread_int(4)
+    int2 = bread_int(4)
+    return [int1, int2]
+
+# Read command header
+def readCmdHeader():
+    t_cmd        = bread(1)
+    t_tick       = bread_int(4)
+    t_playerSlot = bread(1)
+    return [t_cmd, t_tick, t_playerSlot]
+
+#------------------------------
+#    Misc functions
+#------------------------------
+
+# Decide which event type is used
+def whichEventType(a_data, a_type):
+    if (a_type == 1):
+        return str(a_data.val_string)
+    elif (a_type == 2):
+        return str(a_data.val_float)
+    elif (a_type == 3):
+        return str(a_data.val_long)
+    elif (a_type == 4):
+        return str(a_data.val_short)
+    elif (a_type == 5):
+        return str(a_data.val_byte)
+    elif (a_type == 6):
+        return str(a_data.val_bool)
+    elif (a_type == 7):
+        return str(a_data.val_uint64)
+    elif (a_type == 8):
+        return str(a_data.val_wstring)
+    
+# Change bytes to string
+def b_str(a_bytes):
+    return a_bytes.decode("utf-8")
+
+# Remove \x00 bytes in string
+def readString_raw(a_str):
+    return a_str.split(b'\0',1)[0]
+
+# Read int32 [the way its compressed]
+def readvarint32(x, pos):
+    result = ""
+    count = 0
+    t_pos = pos
+    isIt = True
+    while (isIt):
+        if (count == 5):
+            result = int(result, 2)
+            return result, pos
+        b = bin(x[t_pos])[2:].zfill(8)
+        t_pos += 1
+        result = b[1:] + result
+        count += 1
+        isIt = int(b, 2) & 0x80
+    result = int(result, 2)
+    return result, t_pos
+
+# Read string [the way its compressed]
+def readString(a_data, a_pos):
+    strin = ""
+    while True:
+        charz = a_data[a_pos]
+        if (charz == 0):
+            break
+        strin += chr(charz)
+        a_pos += 1
+    return [strin, a_pos]
+
+#------------------------------
+#    Save to output
+#------------------------------
+
+def styleKey(a_name, a_key, a_padding):
+    return (a_name+": ").ljust(a_padding) + str(a_key) + "\n"
+
+#------------------------------
+#    Handle output
+#------------------------------
+
+# Demo Header info
+def outputDemoHeader(a_data):
+    buff = ""
+    buff += ">>> CSGO DEMO INFO\n"
+    buff += styleKey("demofilestamp", b_str(a_data.demofilestamp)[:-1], 20)
+    buff += styleKey("demoprotocol", a_data.demoprotocol, 20)
+    buff += styleKey("networkprotocol", a_data.networkprotocol, 20)
+    buff += styleKey("servername", b_str(readString_raw(a_data.servername)), 20)
+    buff += styleKey("clientname", b_str(readString_raw(a_data.clientname)), 20)
+    buff += styleKey("mapname", b_str(readString_raw(a_data.mapname)), 20)
+    buff += styleKey("gamedirectory", b_str(readString_raw(a_data.gamedirectory)), 20)
+    buff += styleKey("playback_time", a_data.playback_time, 20)
+    buff += styleKey("demofilestamp", a_data.playback_ticks, 20)
+    buff += styleKey("playback_ticks", a_data.playback_frames, 20)
+    buff += styleKey("signonlength", a_data.signonlength, 20)
+    buff += "\n>>> CSGO DEMO TRANSCRIPTION\n"
+    outFile.write(buff)
+
+# CMD 4
+def outputTick(a_data):
+    pb_tick = protonet.CNETMsg_Tick()
+    pb_tick.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    if(SIMPLIFY_TICK):
+        buff += ">> Current tick: ".ljust(30) + str(pb_tick.tick) + "\n\n"
+    else:
+        buff += "\n##### cmd 4 - Tick\n"
+        buff += styleKey("Current tick count", pb_tick.tick, 50)
+        buff += styleKey("Host frame computation time in usec", pb_tick.host_computationtime, 50)
+        buff += styleKey("Host frame computation time stddev in usec", pb_tick.host_computationtime_std_deviation, 50)
+        buff += styleKey("Host frame start time stddev in usec", pb_tick.host_framestarttime_std_deviation, 50)
+    outFile.write(buff)
+    
+# CMD 5
+def outputStrCmd(a_data):
+    pb_strcomm = protonet.CNETMsg_StringCmd()
+    pb_strcomm.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 5 - String Command\n"
+    buff += styleKey("Command", pb_strcomm.command, 10)
+    outFile.write(buff)
+
+# CMD 6
+def outputSetCVar(a_data):
+    pb_cvar = protonet.CNETMsg_SetConVar()
+    pb_cvar.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 6 - Set CVar\n"
+    for i in pb_cvar.convars.cvars:
+        buff += styleKey("Name of Cvar", i.name, 17)
+        buff += styleKey("Value of Cvar", i.value, 17)
+        buff += "\n"
+    outFile.write(buff)
+
+# CMD 7
+def outputSignOn(a_data):
+    pb_signon = protonet.CNETMsg_SignonState()
+    pb_signon.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 7 - Sign on state\n"
+    buff += styleKey("See SIGNONSTATE_ defines", pb_signon.signon_state, 70)
+    buff += styleKey("Server spawn count (session number)", pb_signon.spawn_count, 70)
+    buff += styleKey("Number of players the server discloses as connected to the server", pb_signon.num_server_players, 70)
+    if (len(pb_signon.players_networkids) > 0):
+        buff += styleKey("Player network ids", pb_signon.players_networkids[0], 70)
+        for i in pb_signon.players_networkids[1:]:
+            buff += styleKey("", i, 70)
+    else:
+        buff += styleKey("Player network ids", "???", 70)
+    buff += styleKey("Name of the current map", pb_signon.map_name, 70)
+    outFile.write(buff)
+
+# CMD 8
+def outputServerInfo(a_data):
+    pb_serverInfo = protonet.CSVCMsg_ServerInfo()
+    pb_serverInfo.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 8 - Server Info\n"
+    buff += styleKey("Protocol version", pb_serverInfo.protocol, 50)
+    buff += styleKey("Number of changelevels since server start", pb_serverInfo.server_count, 50)
+    buff += styleKey("Dedicated server", pb_serverInfo.is_dedicated, 50)
+    buff += styleKey("Official Valve Server", pb_serverInfo.is_official_valve_server, 50)
+    buff += styleKey("HLTV server", pb_serverInfo.is_hltv, 50)
+    buff += styleKey("Will be redirecting to proxy relay", pb_serverInfo.is_redirecting_to_proxy_relay, 50)
+    buff += styleKey("L = linux, W = Win32", str(pb_serverInfo.c_os).upper(), 50)
+    buff += styleKey("Server map CRC", pb_serverInfo.map_crc, 50)
+    buff += styleKey("client.dll CRC server is using", pb_serverInfo.client_crc, 50)
+    buff += styleKey("String table CRC server is using", pb_serverInfo.string_table_crc, 50)
+    buff += styleKey("Max number of clients on server", pb_serverInfo.max_clients, 50)
+    buff += styleKey("Max number of server classes", pb_serverInfo.max_classes, 50)
+    buff += styleKey("Our client slot number", pb_serverInfo.player_slot, 50)
+    buff += styleKey("Server tick interval", pb_serverInfo.tick_interval, 50)
+    buff += styleKey("Game directory", pb_serverInfo.game_dir, 50)
+    buff += styleKey("Name of current map", pb_serverInfo.map_name, 50)
+    buff += styleKey("Name of current map group name", pb_serverInfo.map_group_name, 50)
+    buff += styleKey("Name of current skybox", pb_serverInfo.sky_name, 50)
+    buff += styleKey("Server name", pb_serverInfo.host_name, 50)
+    buff += styleKey("Ugc map id", pb_serverInfo.ugc_map_id, 50)
+    outFile.write(buff)
+    
+# CMD 10
+def outputClassInfo(a_data):
+    pb_classinfo = protonet.CSVCMsg_ClassInfo()
+    pb_classinfo.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 10 - Class Info\n"
+    buff += styleKey("Create on client", pb_classinfo.create_on_client, 25)
+    for i in pb_classinfo.classes:
+        buff += styleKey("Class ID", i.class_id, 17)
+        buff += styleKey("Data table name", i.data_table_name, 17)
+        buff += styleKey("Class name", i.class_name, 17)
+    outFile.write(buff)
+    
+# CMD 12
+def outputCStrTable(a_data):
+    pb_cstable = protonet.CSVCMsg_CreateStringTable()
+    pb_cstable.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 12 - Create String Table\n"
+    buff += styleKey("Name", pb_cstable.name, 25)
+    buff += styleKey("Max entries", pb_cstable.max_entries, 25)
+    buff += styleKey("Num entries", pb_cstable.num_entries, 25)
+    buff += styleKey("User data fixed size", pb_cstable.user_data_fixed_size, 25)
+    buff += styleKey("User data size", pb_cstable.user_data_size, 25)
+    buff += styleKey("User data size bits", pb_cstable.user_data_size_bits, 25)
+    buff += styleKey("Flags", pb_cstable.flags, 25)
+    buff += styleKey("String data", pb_cstable.string_data, 25)
+    outFile.write(buff)
+    
+# CMD 13
+def outputUStrTable(a_data):
+    pb_ustrtable = protonet.CSVCMsg_UpdateStringTable()
+    pb_ustrtable.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 13 - Update String Table\n"
+    buff += styleKey("Table ID", pb_ustrtable.table_id, 25)
+    buff += styleKey("Num of changed entries", pb_ustrtable.num_changed_entries, 25)
+    if(not SIMPLIFY_DATA):
+        buff += styleKey("String data", pb_ustrtable.string_data, 25)
+    outFile.write(buff)
+    
+# CMD 14
+def outputVoiceInit(a_data):
+    pb_voiceinit = protonet.CSVCMsg_VoiceInit()
+    pb_voiceinit.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 14 - Voice Init\n"
+    buff += styleKey("Quality", pb_voiceinit.quality, 10)
+    buff += styleKey("Codec", pb_voiceinit.codec, 10)
+    outFile.write(buff)
+    
+# CMD 17
+def outputSound(a_data):
+    pb_sounds = protonet.CSVCMsg_Sounds()
+    pb_sounds.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 17 - Sounds\n"
+    buff += styleKey("Reliable sound", pb_sounds.reliable_sound, 25)
+    buff += "Sounds:\n"
+    for i in pb_sounds.sounds:
+        if(SIMPLIFY_SOUND):
+            buff += styleKey("> Sound", " ".join([str(x) for x in [i.origin_x, i.origin_y, i.origin_z, i.volume, i.delay_value, i.sequence_number, i.entity_index, i.channel, i.pitch, i.flags, i.sound_num, i.sound_num_handle, i.speaker_entity, i.random_seed, i.sound_level, i.is_sentence, i.is_ambient]]), 10)
+        else:
+            buff += styleKey("> Origin X", i.origin_x, 25)
+            buff += styleKey("> Origin Y", i.origin_y, 25)
+            buff += styleKey("> Origin Z", i.origin_z, 25)
+            buff += styleKey("> Volume", i.volume, 25)
+            buff += styleKey("> Delay Value", i.delay_value, 25)
+            buff += styleKey("> Sequence Number", i.sequence_number, 25)
+            buff += styleKey("> Entity Index", i.entity_index, 25)
+            buff += styleKey("> Channel", i.channel, 25)
+            buff += styleKey("> Pitch", i.pitch, 25)
+            buff += styleKey("> Flags", i.flags, 25)
+            buff += styleKey("> Sound num", i.sound_num, 25)
+            buff += styleKey("> Sound num handle", i.sound_num_handle, 25)
+            buff += styleKey("> Speaker_entity", i.speaker_entity, 25)
+            buff += styleKey("> Random seed", i.random_seed, 25)
+            buff += styleKey("> Sound level", i.sound_level, 25)
+            buff += styleKey("> Is sentence", i.is_sentence, 25)
+            buff += styleKey("> Is ambient ", i.is_ambient, 25)
+    outFile.write(buff)
+   
+# CMD 18
+def outputSetView(a_data):
+    pb_setview = protonet.CSVCMsg_SetView()
+    pb_setview.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 18 - Set View\n"
+    buff += styleKey("Entity index", pb_setview.entity_index, 15)
+    outFile.write(buff)
+    
+# CMD 24
+def outputUserMsg(a_data):
+    pb_usermsg = protonet.CSVCMsg_UserMessage()
+    pb_usermsg.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 23 - User Message\n"
+    buff += styleKey("Msg type", pb_usermsg.msg_type, 10)
+    buff += styleKey("Msg data", pb_usermsg.msg_data, 10)
+    outFile.write(buff)
+    
+# CMD 25
+def outputGameEvent(a_data):
+    pb_gameevent = protonet.CSVCMsg_GameEvent()
+    pb_gameevent.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 25 - Game Event\n"
+    if(SIMPLIFY_EVENT):
+        buff += styleKey("Event", str(pb_gameevent.event_name) + " " + str(pb_gameevent.eventid) + " | " + ", ".join([whichEventType(i, i.type) for i in pb_gameevent.keys]), 10)
+    else:
+        buff += styleKey("Event name", pb_gameevent.event_name, 20)
+        buff += styleKey("Event id", pb_gameevent.eventid, 20)
+        buff += "Keys:\n"
+        for i in pb_gameevent.keys:
+            buff += styleKey("> Type", i.type, 20)
+            if(i.type == 1):
+                buff += styleKey("> String", i.val_string, 20)
+            elif(i.type == 2):
+                buff += styleKey("> Float", i.val_float, 20)
+            elif (i.type == 3):
+                buff += styleKey("> Long", i.val_long, 20)
+            elif (i.type == 4):
+                buff += styleKey("> Short", i.val_short, 20)
+            elif (i.type == 5):
+                buff += styleKey("> Byte", i.val_byte, 20)
+            elif (i.type == 6):
+                buff += styleKey("> Bool", i.val_bool, 20)
+            elif (i.type == 7):
+                buff += styleKey("> UINT64", i.val_uint64, 20)
+            elif (i.type == 8):
+                buff += styleKey("> Wstring", i.val_wstring, 20)
+    outFile.write(buff)
+
+# CMD 26
+def outputPEntities(a_data):
+    pb_pentities = protonet.CSVCMsg_PacketEntities()
+    pb_pentities.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 26 - Packet Entities\n"
+    buff += styleKey("Max entries", pb_pentities.max_entries, 20)
+    buff += styleKey("Updated entries", pb_pentities.updated_entries, 20)
+    buff += styleKey("Is delta", pb_pentities.is_delta, 20)
+    buff += styleKey("Update baseline", pb_pentities.update_baseline, 20)
+    buff += styleKey("Baseline", pb_pentities.baseline, 20)
+    buff += styleKey("Delta from", pb_pentities.delta_from, 20)
+    if (not SIMPLIFY_DATA):
+        buff += styleKey("Entity data", pb_pentities.entity_data, 20)
+    outFile.write(buff)
+    
+# CMD 27
+def outputTEntities(a_data):
+    pb_tentities = protonet.CSVCMsg_TempEntities()
+    pb_tentities.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 27 - Temp Entities\n"
+    buff += styleKey("Reliable", pb_tentities.reliable, 15)
+    buff += styleKey("Num entries", pb_tentities.num_entries, 15)
+    if (not SIMPLIFY_DATA):
+        buff += styleKey("Entity data", pb_tentities.entity_data, 15)
+    outFile.write(buff)
+    
+# CMD 28
+def outputPrefetch(a_data):
+    pb_prefetch = protonet.CSVCMsg_Prefetch()
+    pb_prefetch.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 28 - Prefetch\n"
+    buff += styleKey("Sound index", pb_prefetch.sound_index, 15)
+    outFile.write(buff)
+    
+# CMD 30
+def outputGameEventList(a_data):
+    pb_eventlist = protonet.CSVCMsg_GameEventList()
+    pb_eventlist.ParseFromString(a_data)
+    buff = ""
+    # Save to output
+    buff += "\n##### cmd 30 - Game Event List\n"
+    for i in pb_eventlist.descriptors:
+        buff += styleKey("Event ID", i.eventid, 10)
+        buff += styleKey("Name", i.name, 10)
+        buff += "Keys:\n"
+        for j in i.keys:
+            buff += styleKey("> Key type", j.type, 10)
+            buff += styleKey("> Key name", j.name, 10)
+        buff += "\n"
+    outFile.write(buff)
+    
+#------------------------------
+#     WIP
+#------------------------------
+def handleStringTable():
+    lens = bread_int(4)
+    poz = 0
+    numTables = bread_int(1)
+    data = bread(lens-1)
+    # for i in range(numTables):
+    #     tableName, poz = readString(data, poz)
+    #     numstrings = int.from_bytes(data[poz:poz+2], byteorder="little")
+    #     poz += 2
+    #     for j in range(numstrings):
+    #         word, poz = readString(data, poz)
+            #print(numstrings)
+def handleDataTable():
+    lens = bread_int(4)
+    poz = 0
+    data = bread(lens)
+    pb_sendtable = protonet.CSVCMsg_SendTable()
+    outFile.write("#### Data Table" + "\n")
+    while True:
+        typed, poz = readvarint32(data, poz)
+        size, poz = readvarint32(data, poz)
+        pb_sendtable.ParseFromString(data[poz:poz+size])
+        if(PRINT_DATATABLE):
+            outFile.write("Is end: ".ljust(20) + str(pb_sendtable.is_end) + "\n")
+            outFile.write("Table name: ".ljust(20) + str(pb_sendtable.net_table_name) + "\n")
+            outFile.write("Need decoder: ".ljust(20) + str(pb_sendtable.needs_decoder) + "\n\n")
+            for i in pb_sendtable.props:
+                outFile.write("Type: ".ljust(20) + str(i.type) + "\n")
+                outFile.write("Var name: ".ljust(20) + str(i.var_name) + "\n")
+                outFile.write("Flags: ".ljust(20) + str(i.flags) + "\n")
+                outFile.write("Priority: ".ljust(20) + str(i.priority) + "\n")
+                outFile.write("Dt name: ".ljust(20) + str(i.dt_name) + "\n")
+                outFile.write("Num of elements: ".ljust(20) + str(i.num_elements) + "\n")
+                outFile.write("Low value: ".ljust(20) + str(i.low_value) + "\n")
+                outFile.write("High value: ".ljust(20) + str(i.high_value) + "\n")
+                outFile.write("Num bits: ".ljust(20) + str(i.num_bits) + "\n\n")
+        if(pb_sendtable.is_end):
+            break
+        poz += size
+#------------------------------
+def handleDemoPacket():
+    info = csgo.struct_democmdinfo()
+    info.ReadCmdInfo(bread(csgo.DEMOCMDINFO_SIZE))        # Read command info
+    dummy, dummy = readSequenceInfo()                     # Seems no use
+    lens = bread_int(4)
+    data = bread(lens)
+    pos = 0
+    while(pos < lens):
+        cmd, pos  = readvarint32(data, pos)
+        size, pos = readvarint32(data, pos)
+        buffer = data[pos:pos + size]
+        # Tick
+        if(cmd == 4):
+            outputTick(buffer)
+        # String Command
+        elif(cmd == 5):
+            outputStrCmd(buffer)
+        # Sends one/multiple convar/userinfo settings
+        elif(cmd == 6):
+            outputSetCVar(buffer)
+        # Signon State
+        elif (cmd == 7):
+            outputSignOn(buffer)
+        # Server info
+        elif(cmd == 8):
+            outputServerInfo(buffer)
+        # Class info
+        elif(cmd == 10):
+            outputClassInfo(buffer)
+        # Create String Table
+        elif(cmd == 12):
+            outputCStrTable(buffer)
+        # Update String Table
+        elif(cmd == 13):
+            outputUStrTable(buffer)
+        # Voice Init
+        elif(cmd == 14):
+            outputVoiceInit(buffer)
+        # Sounds
+        elif(cmd == 17):
+            outputSound(buffer)
+        # Set View
+        elif(cmd == 18):
+            outputSetView(buffer)
+        # User Message
+        elif(cmd == 23):
+            outputUserMsg(buffer)
+        # Game Event
+        elif(cmd == 25):
+            outputGameEvent(buffer)
+        # Packet Entities
+        elif(cmd == 26):
+            outputPEntities(buffer)
+        # Temp Entities
+        elif(cmd == 27):
+            outputTEntities(buffer)
+        # Prefetch
+        elif(cmd == 28):
+            outputPrefetch(buffer)
+        # Game Event List
+        elif(cmd == 30):
+            outputGameEventList(buffer)
+        # Unhandled event
+        elif(0 <= cmd < 32):
+            print("---UNHANDLED EVENT---")
+            print(cmd, size)
+            print(buffer)
+            sys.exit(0)
+            
+        pos += size
+        
+#------------------------------
+#    Main function
+#------------------------------
+
+# Process demo header
+demoHeader = csgo.struct_demoheader()
+demoHeader.demofilestamp   = bread(8)
+demoHeader.demoprotocol    = bread_int(4)
+demoHeader.networkprotocol = bread_int(4)
+demoHeader.servername      = bread(260)
+demoHeader.clientname      = bread(260)
+demoHeader.mapname         = bread(260)
+demoHeader.gamedirectory   = bread(260)
+demoHeader.playback_time   = bread_float(4)
+demoHeader.playback_ticks  = bread_int(4)
+demoHeader.playback_frames = bread_int(4)
+demoHeader.signonlength    = bread_int(4)
+
+outputDemoHeader(demoHeader)
+
+# Dump demo
+s_bMatchStartOccured = False
+if (demoHeader.demofilestamp == csgo.DEMO_HEADER_ID and demoHeader.demoprotocol == csgo.DEMO_PROTOCOL):
+    while not DEMO_FINISHED:
+        DEMO_CMD, DEMO_TICK, DEMO_PLAYER_SLOT = readCmdHeader()
+        outFile.write("################### " + " | ".join([str(DEMO_CMD), str(DEMO_TICK), str(DEMO_PLAYER_SLOT)])+"\n")
+        if (DEMO_CMD == csgo.dem_signon or DEMO_CMD == csgo.dem_packet):
+            handleDemoPacket()
+            
+        elif (DEMO_CMD == csgo.dem_usercmd):
+            DEMO_FINISHED = True
+            print("dem_usercmd")
+            
+        elif (DEMO_CMD == csgo.dem_stringtables):
+            handleStringTable()
+            print("dem_stringtables")
+            
+        elif (DEMO_CMD == csgo.dem_datatables):
+            handleDataTable()
+            print("dem_datatables")
+            
+        elif (DEMO_CMD == csgo.dem_consolecmd):
+            DEMO_FINISHED = True
+            print("dem_consolecmd")
+            
+        elif (DEMO_CMD == csgo.dem_stop):
+            DEMO_FINISHED = True
+            print("dem_stop")
+            
+        elif (DEMO_CMD == csgo.dem_synctick):
+            pass
+#------------------------------
