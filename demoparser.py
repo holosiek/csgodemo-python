@@ -26,17 +26,20 @@ DEMO_PLAYER_SLOT = 0       # Player slot
 
 PREV_DEMO_TICK   = -1      # Previous demo tick, used for json output
 
+HAS_ROUND_ON     = False   # Check if round started
+ROUND_NUM        = 1       # Number of the round
+
 #------------------------------
 #    Open input and output file
 #------------------------------
 
-jsonbuff = {"ticks":[]}
+jsonbuff = {"ticks":[], "events":{}, "players":{}}
 jsonbuff_tick = {"tick": PREV_DEMO_TICK, "commands": []}
 inFile  = open("test.dem", "rb")
 if(SAVE_AS_JSON):
     outFile = open("output.json", "w")
 else:
-    outFile = open("output.txt", "w")
+    outFile = open("output.txt", "w", encoding="utf-8")
 
 #------------------------------
 #    Read from input file
@@ -513,7 +516,7 @@ def outputUserMsg(a_data):
 def outputGameEvent(a_data):
     pb_gameevent = protonet.CSVCMsg_GameEvent()
     pb_gameevent.ParseFromString(a_data)
-    if (SAVE_AS_JSON):
+    if(SAVE_AS_JSON):
         buff = {"comm_nr": 25}
         buff["event_name"] = pb_gameevent.event_name
         buff["eventid"] = pb_gameevent.eventid
@@ -539,6 +542,10 @@ def outputGameEvent(a_data):
                 buff_i["value"] = i.val_wstring
             buff["keys"].append(buff_i)
         jsonbuff_tick["commands"].append(buff)
+        
+        # Parse events for simplicity
+        if(pb_gameevent.eventid == 7):
+            jsonbuff["players"][buff["keys"][2]["value"]] = {"name": buff["keys"][0]["value"]}
     else:
         buff = ""
         # Save to output
@@ -645,10 +652,12 @@ def outputGameEventList(a_data):
             buff_i["eventid"] = i.eventid
             buff_i["name"]    = i.name
             buff_i["keys"]    = []
+            jsonbuff["events"][i.eventid] = {"name": i.name, "keys": []}
             for j in i.keys:
                 buff_j = {}
                 buff_j["type"] = j.type
                 buff_j["name"] = j.name
+                jsonbuff["events"][i.eventid]["keys"].append(buff_j)
                 buff_i["keys"].append(buff_j)
             buff["descriptors"].append(buff_i)
         jsonbuff_tick["commands"].append(buff)
