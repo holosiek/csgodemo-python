@@ -36,6 +36,12 @@ def b2int(x):
     return int.from_bytes(x, byteorder="little")
 def b2float(x):
     return struct.unpack('f', x)[0]
+def b2str(x):
+    return x.decode("utf-8")
+
+# Remove \x00 bytes in string
+def readString_raw(a_str):
+    return a_str.split(b'\0',1)[0]
 #-------------------------------------------
 class Vector:
     x, y, z = 0, 0, 0
@@ -150,6 +156,35 @@ class struct_democmdinfo:
         for i in self.u:
             i.reset()
 
+class player_info_t:
+    version = 0
+    xuid = 0
+    name = ""
+    userID = 0
+    guid = ""
+    friendsID = 0
+    friendsName = ""
+    fakeplayer = False
+    ishltv = False
+    customFiles = []
+    filesDownloaded = 0
+    entityID = 0
+
+    def parse(self, a_data, a_entry):
+        parsed = struct.unpack("2Q128si33sI128s2?3LBi", a_data)
+        self.version = parsed[0]
+        self.xuid = parsed[1]
+        self.name = b2str(readString_raw(parsed[2]))
+        self.userID = parsed[3]
+        self.guid = b2str(readString_raw(parsed[4]))
+        self.friendsID = parsed[5]
+        self.friendsName = b2str(readString_raw(parsed[6]))
+        self.fakeplayer = parsed[7]
+        self.ishltv = parsed[8]
+        self.customFiles = parsed[9]
+        self.filesDownloaded = [parsed[10], parsed[11], parsed[12], parsed[13]]
+        self.entityID = a_entry
+
 class CBitRead:
     data = ""
     dataBytes = 0
@@ -220,13 +255,16 @@ class CBitRead:
 
     # Read n-bits
     def readBits(self, a_bits):
-        res = ""
+        res = b''
         bitsleft = a_bits
-        while(bitsleft > 8):
-            res += chr(self.readUBitLong(8))
+        while(bitsleft >= 32):
+            res += bytes([self.readUBitLong(8), self.readUBitLong(8), self.readUBitLong(8), self.readUBitLong(8)])
+            bitsleft -= 32
+        while(bitsleft >= 8):
+            res += bytes([self.readUBitLong(8)])
             bitsleft -= 8
         if(bitsleft):
-            res += chr(self.readUBitLong(bitsleft))
+            res += bytes([self.readUBitLong(bitsleft)])
         return res
 
     # Read n-bytes

@@ -30,6 +30,7 @@ HAS_ROUND_ON     = False   # Check if round started
 ROUND_NUM        = 1       # Number of the round
 
 TABLE_ARR        = []      # Array containing string tables
+PLAYER_LIST      = []      # Array containing player_info_t
 
 #------------------------------
 #    Open input and output file
@@ -112,10 +113,6 @@ def whichEventType(a_data, a_type):
 def b_str(a_bytes):
     return a_bytes.decode("utf-8")
 
-# Remove \x00 bytes in string
-def readString_raw(a_str):
-    return a_str.split(b'\0',1)[0]
-
 # Read int32 [the way its compressed]
 def readvarint32(x, pos):
     result = ""
@@ -156,8 +153,16 @@ def styleKey(a_name, a_key, a_padding):
 #    Dump String Table
 #------------------------------
 
+def ifPlayerExists(a_id):
+    thereIs = False
+    for i in PLAYER_LIST:
+        if i.entityID == a_id:
+            return i
+    return thereIs
+
 def parseStringTable(a_data, a_isPlayerInfo = False):
     resArray = []
+    lastEntry = -1
     buf = csgo.CBitRead(a_data.string_data)
     entryBits = int(math.log2(a_data.max_entries))
 
@@ -165,8 +170,10 @@ def parseStringTable(a_data, a_isPlayerInfo = False):
         return
 
     for i in range(a_data.num_entries):
+        entryIndex = lastEntry+1
         if(not buf.readBit()):
-            entryIndex = buf.readUBitLong(entryBits)
+            entryIndex = int(buf.readUBitLong(entryBits))
+        lastEntry = entryIndex
         if(buf.readBit()):
             # Should we check substring
             if(buf.readBit()):
@@ -177,16 +184,24 @@ def parseStringTable(a_data, a_isPlayerInfo = False):
                 stringo = buf.readString()
             resArray.append(stringo)
         # Read user data
+        userData = ""
         if(buf.readBit()):
             if(a_data.user_data_fixed_size):
                 userData = buf.readBits(a_data.user_data_size_bits)
             else:
                 bytez = buf.readUBitLong(14)
                 userData = buf.readBytes(bytez)
+        if (a_isPlayerInfo and len(userData)):
+            playerInfo = csgo.player_info_t()
+            playerInfo.parse(userData, entryIndex)
+            playerFound = ifPlayerExists(entryIndex)
+            if(playerFound == False):
+                PLAYER_LIST.append(playerInfo)
     return ", ".join(resArray)
 
 def preParseStringTable(a_predata, a_info, a_isPlayerInfo = False):
     resArray = []
+    lastEntry = -1
     buf = csgo.CBitRead(a_predata.string_data)
     entryBits = int(math.log2(a_info["max_entries"]))
 
@@ -194,8 +209,10 @@ def preParseStringTable(a_predata, a_info, a_isPlayerInfo = False):
         return
 
     for i in range(a_predata.num_changed_entries):
+        entryIndex = lastEntry+1
         if (not buf.readBit()):
-            entryIndex = buf.readUBitLong(entryBits)
+            entryIndex = int(buf.readUBitLong(entryBits))
+        lastEntry = entryIndex
         if (buf.readBit()):
             # Should we check substring
             if (buf.readBit()):
@@ -206,12 +223,19 @@ def preParseStringTable(a_predata, a_info, a_isPlayerInfo = False):
                 stringo = buf.readString()
             resArray.append(stringo)
         # Read user data
-        if (buf.readBit()):
-            if (a_info["user_data_fixed_size"]):
+        userData = ""
+        if(buf.readBit()):
+            if(a_info["user_data_fixed_size"]):
                 userData = buf.readBits(a_info["user_data_size_bits"])
             else:
                 bytez = buf.readUBitLong(14)
                 userData = buf.readBytes(bytez)
+        if(a_isPlayerInfo and len(userData)):
+            playerInfo = csgo.player_info_t()
+            playerInfo.parse(userData, entryIndex)
+            playerFound = ifPlayerExists(entryIndex)
+            if(playerFound == False):
+                PLAYER_LIST.append(playerInfo)
     return ", ".join(resArray)
 
 #------------------------------
@@ -225,10 +249,10 @@ def outputDemoHeader(a_data):
         buff["demofilestamp"]   = b_str(a_data.demofilestamp)[:-1]
         buff["demoprotocol"]    = a_data.demoprotocol
         buff["networkprotocol"] = a_data.networkprotocol
-        buff["servername"]      = b_str(readString_raw(a_data.servername))
-        buff["clientname"]      = b_str(readString_raw(a_data.clientname))
-        buff["mapname"]         = b_str(readString_raw(a_data.mapname))
-        buff["gamedirectory"]   = b_str(readString_raw(a_data.gamedirectory))
+        buff["servername"]      = b_str(csgo.readString_raw(a_data.servername))
+        buff["clientname"]      = b_str(csgo.readString_raw(a_data.clientname))
+        buff["mapname"]         = b_str(csgo.readString_raw(a_data.mapname))
+        buff["gamedirectory"]   = b_str(csgo.readString_raw(a_data.gamedirectory))
         buff["playback_time"]   = a_data.playback_time
         buff["demofilestamp"]   = a_data.playback_ticks
         buff["playback_ticks"]  = a_data.playback_frames
@@ -240,10 +264,10 @@ def outputDemoHeader(a_data):
         buff += styleKey("demofilestamp", b_str(a_data.demofilestamp)[:-1], 20)
         buff += styleKey("demoprotocol", a_data.demoprotocol, 20)
         buff += styleKey("networkprotocol", a_data.networkprotocol, 20)
-        buff += styleKey("servername", b_str(readString_raw(a_data.servername)), 20)
-        buff += styleKey("clientname", b_str(readString_raw(a_data.clientname)), 20)
-        buff += styleKey("mapname", b_str(readString_raw(a_data.mapname)), 20)
-        buff += styleKey("gamedirectory", b_str(readString_raw(a_data.gamedirectory)), 20)
+        buff += styleKey("servername", b_str(csgo.readString_raw(a_data.servername)), 20)
+        buff += styleKey("clientname", b_str(csgo.readString_raw(a_data.clientname)), 20)
+        buff += styleKey("mapname", b_str(csgo.readString_raw(a_data.mapname)), 20)
+        buff += styleKey("gamedirectory", b_str(csgo.readString_raw(a_data.gamedirectory)), 20)
         buff += styleKey("playback_time", a_data.playback_time, 20)
         buff += styleKey("demofilestamp", a_data.playback_ticks, 20)
         buff += styleKey("playback_ticks", a_data.playback_frames, 20)
