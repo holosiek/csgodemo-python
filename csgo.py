@@ -59,7 +59,7 @@ class struct_demoheader:
     playback_ticks  = 0        # Number of ticks in track
     playback_frames = 0        # Number of frames in track
     signonlength    = 0        # Length of sigondata in bytes
-    
+
 # Split structure
 class struct_split:
     flags = FDEMO_NORMAL
@@ -88,7 +88,7 @@ class struct_split:
         self.viewOrigin2 = self.viewOrigin
         self.viewAngles2 = self.viewAngles
         self.localViewAngles2 = self.localViewAngles
-        
+
 # Demo command information structure
 class struct_democmdinfo:
     u = [struct_split()]*MAX_SPLITSCREEN_CLIENTS
@@ -98,7 +98,7 @@ class struct_democmdinfo:
             # flags
             i.flags = b2int(text[textPos:textPos+INT_SIZE])
             textPos += INT_SIZE
-            
+
             # viewOrigin
             i.viewOrigin.x = b2float(text[textPos:textPos + FLOAT_SIZE])
             textPos += FLOAT_SIZE
@@ -106,7 +106,7 @@ class struct_democmdinfo:
             textPos += FLOAT_SIZE
             i.viewOrigin.z = b2float(text[textPos:textPos + FLOAT_SIZE])
             textPos += FLOAT_SIZE
-            
+
             # viewAngles
             i.viewAngles.x = b2float(text[textPos:textPos + FLOAT_SIZE])
             textPos += FLOAT_SIZE
@@ -114,7 +114,7 @@ class struct_democmdinfo:
             textPos += FLOAT_SIZE
             i.viewAngles.z = b2float(text[textPos:textPos + FLOAT_SIZE])
             textPos += FLOAT_SIZE
-            
+
             # localViewAngles
             i.localViewAngles.x = b2float(text[textPos:textPos + FLOAT_SIZE])
             textPos += FLOAT_SIZE
@@ -149,3 +149,126 @@ class struct_democmdinfo:
     def reset(self):
         for i in self.u:
             i.reset()
+
+class CBitRead:
+    data = ""
+    dataBytes = 0
+    dataPart = ""
+
+    posByte = 0
+    bitsFree = 0
+    overflow = False
+    # ---------------------------------------------------------
+    # Grab another part of data to buffer
+    def grabNext4Bytes(self):
+        if(self.posByte+4 >= len(self.data)):
+            self.bitsFree = 1
+            self.dataPart = 0
+            self.overflow = True
+        else:
+            self.dataPart = self.data[self.posByte] + (self.data[self.posByte + 1] << 8) + (self.data[self.posByte + 2] << 16) + (self.data[self.posByte + 3] << 24)
+            self.posByte += 4
+
+    # Add 32 bits free to use and grab new data to buffer
+    def fetchNext(self):
+        self.bitsFree = 32
+        self.grabNext4Bytes()
+    # ---------------------------------------------------------
+    # Read unsigned n-bits
+    def readUBitLong(self, a_bits):
+        if(self.bitsFree >= a_bits):
+            # By using mask take data needed from buffer
+            res = self.dataPart & ((2**a_bits)-1)
+            self.bitsFree -= a_bits
+            # Check if we need to grab new data to buffer
+            if(self.bitsFree == 0):
+                self.fetchNext()
+            else:
+                # Move buffer to the right
+                self.dataPart >>= a_bits
+            return res
+        else:
+            # Take whats left
+            res = self.dataPart
+            a_bits -= self.bitsFree
+            # Save how many free bits we used
+            t_bitsFree = self.bitsFree
+            # Grab new data to buffer
+            self.fetchNext()
+            # Append new data to result
+            if(self.overflow):
+                return 0
+            res |= ((self.dataPart & ((2**a_bits)-1)) << t_bitsFree)
+            self.bitsFree -= a_bits
+            # Move buffer to the right
+            self.dataPart >>= a_bits
+            return res
+
+    # Read signed n-bits
+    def readSBitLong(self, a_bits):
+        return (self.readUBitLong(a_bits) << (32 - a_bits)) >> (32 - a_bits)
+
+    # Read string
+    def readString(self):
+        res = ""
+        while True:
+            char = self.readSBitLong(8)
+            if(char == 0):
+                break
+            res += chr(char)
+        return res
+
+    # Read n-bits
+    def readBits(self, a_bits):
+        res = ""
+        bitsleft = a_bits
+        while(bitsleft > 8):
+            res += chr(self.readUBitLong(8))
+            bitsleft -= 8
+        if(bitsleft):
+            res += chr(self.readUBitLong(bitsleft))
+        return res
+
+    # Read n-bytes
+    def readBytes(self, a_bytes):
+        return self.readBits(a_bytes << 3)
+
+    # Read 1 bit
+    def readBit(self):
+        aBit = self.dataPart & 1
+        self.bitsFree -= 1
+        if(self.bitsFree == 0):
+            self.fetchNext()
+        else:
+            self.dataPart >>= 1
+        return aBit
+    # ---------------------------------------------------------
+    def __init__(self, a_data):
+        # Save data to vars
+        self.data      = a_data
+        self.dataBytes = len(a_data)
+
+        # Calculate head
+        head = self.dataBytes%4
+
+        # If there is less bytes than potencial head OR head exists
+        if( self.dataBytes < 4 or head > 0 ):
+            if(head > 2):
+                self.dataPart = self.data[0] + (self.data[1] << 8) + (self.data[2] << 16)
+                self.posByte = 3
+            elif(head > 1):
+                self.dataPart = self.data[0] + (self.data[1] << 8)
+                self.posByte = 2
+            else:
+                self.dataPart = self.data[0]
+                self.posByte = 1
+            self.bitsFree = head << 3
+        else:
+            self.posByte = head
+            self.dataPart = self.data[self.posByte] + (self.data[self.posByte + 1] << 8) + (self.data[self.posByte + 2] << 16) + (self.data[self.posByte + 3] << 24)
+            if(self.data):
+                self.fetchNext()
+            else:
+                self.dataPart = 0
+                self.bitsFree = 1
+            self.bitsFree = min(self.bitsFree, 32)

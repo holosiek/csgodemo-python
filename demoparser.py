@@ -1,4 +1,4 @@
-import struct, sys, csgo, json
+import struct, sys, csgo, json, math
 import cstrike15_usermessages_public_pb2 as protocs
 import netmessages_public_pb2 as protonet
 #------------------------------
@@ -9,7 +9,7 @@ PRINT_DATATABLE = False
 SIMPLIFY_TICK   = True
 SIMPLIFY_SOUND  = True
 SIMPLIFY_EVENT  = True
-SIMPLIFY_DATA   = True
+SIMPLIFY_DATA   = False
 
 SAVE_AS_JSON = True
 
@@ -28,6 +28,8 @@ PREV_DEMO_TICK   = -1      # Previous demo tick, used for json output
 
 HAS_ROUND_ON     = False   # Check if round started
 ROUND_NUM        = 1       # Number of the round
+
+TABLE_ARR        = []      # Array containing string tables
 
 #------------------------------
 #    Open input and output file
@@ -105,7 +107,7 @@ def whichEventType(a_data, a_type):
         return str(a_data.val_uint64)
     elif (a_type == 8):
         return str(a_data.val_wstring)
-    
+
 # Change bytes to string
 def b_str(a_bytes):
     return a_bytes.decode("utf-8")
@@ -149,6 +151,68 @@ def readString(a_data, a_pos):
 
 def styleKey(a_name, a_key, a_padding):
     return (a_name+": ").ljust(a_padding) + str(a_key) + "\n"
+
+#------------------------------
+#    Dump String Table
+#------------------------------
+
+def parseStringTable(a_data, a_isPlayerInfo = False):
+    resArray = []
+    buf = csgo.CBitRead(a_data.string_data)
+    entryBits = int(math.log2(a_data.max_entries))
+
+    if(buf.readBit()):
+        return
+
+    for i in range(a_data.num_entries):
+        if(not buf.readBit()):
+            entryIndex = buf.readUBitLong(entryBits)
+        if(buf.readBit()):
+            # Should we check substring
+            if(buf.readBit()):
+                index = buf.readUBitLong(5)
+                bytestocopy = buf.readUBitLong(5)
+                stringo = buf.readString()
+            else:
+                stringo = buf.readString()
+            resArray.append(stringo)
+        # Read user data
+        if(buf.readBit()):
+            if(a_data.user_data_fixed_size):
+                userData = buf.readBits(a_data.user_data_size_bits)
+            else:
+                bytez = buf.readUBitLong(14)
+                userData = buf.readBytes(bytez)
+    return ", ".join(resArray)
+
+def preParseStringTable(a_predata, a_info, a_isPlayerInfo = False):
+    resArray = []
+    buf = csgo.CBitRead(a_predata.string_data)
+    entryBits = int(math.log2(a_info["max_entries"]))
+
+    if (buf.readBit()):
+        return
+
+    for i in range(a_predata.num_changed_entries):
+        if (not buf.readBit()):
+            entryIndex = buf.readUBitLong(entryBits)
+        if (buf.readBit()):
+            # Should we check substring
+            if (buf.readBit()):
+                index = buf.readUBitLong(5)
+                bytestocopy = buf.readUBitLong(5)
+                stringo = buf.readString()
+            else:
+                stringo = buf.readString()
+            resArray.append(stringo)
+        # Read user data
+        if (buf.readBit()):
+            if (a_info["user_data_fixed_size"]):
+                userData = buf.readBits(a_info["user_data_size_bits"])
+            else:
+                bytez = buf.readUBitLong(14)
+                userData = buf.readBytes(bytez)
+    return ", ".join(resArray)
 
 #------------------------------
 #    Handle output
@@ -210,7 +274,7 @@ def outputTick(a_data):
             buff += styleKey("Host frame computation time stddev in usec", pb_tick.host_computationtime_std_deviation, 50)
             buff += styleKey("Host frame start time stddev in usec", pb_tick.host_framestarttime_std_deviation, 50)
         outFile.write(buff)
-    
+
 # CMD 5
 def outputStrCmd(a_data):
     pb_strcomm = protonet.CNETMsg_StringCmd()
@@ -328,7 +392,7 @@ def outputServerInfo(a_data):
         buff += styleKey("Server name", pb_serverInfo.host_name, 50)
         buff += styleKey("Ugc map id", pb_serverInfo.ugc_map_id, 50)
         outFile.write(buff)
-    
+
 # CMD 10
 def outputClassInfo(a_data):
     pb_classinfo = protonet.CSVCMsg_ClassInfo()
@@ -354,12 +418,15 @@ def outputClassInfo(a_data):
             buff += styleKey("Data table name", i.data_table_name, 17)
             buff += styleKey("Class name", i.class_name, 17)
         outFile.write(buff)
-    
+
 # CMD 12
 def outputCStrTable(a_data):
     pb_cstable = protonet.CSVCMsg_CreateStringTable()
     pb_cstable.ParseFromString(a_data)
     if(SAVE_AS_JSON):
+        isPlayerInfo = False
+        if (pb_cstable.name == "userinfo"):
+            isPlayerInfo = True
         buff = {"comm_nr": 12}
         buff["name"]                  = pb_cstable.name
         buff["max_entries"]           = pb_cstable.max_entries
@@ -368,8 +435,9 @@ def outputCStrTable(a_data):
         buff["user_data_size"]        = pb_cstable.user_data_size
         buff["user_data_size_bits"]   = pb_cstable.user_data_size_bits
         buff["flags"]                 = pb_cstable.flags
-        buff["string_data"]           = str(pb_cstable.string_data)
+        buff["string_data"]           = parseStringTable(pb_cstable, isPlayerInfo)
         jsonbuff_tick["commands"].append(buff)
+        TABLE_ARR.append({"name": pb_cstable.name, "max_entries": pb_cstable.max_entries, "user_data_fixed_size": pb_cstable.user_data_fixed_size, "user_data_size": pb_cstable.user_data_size, "user_data_size_bits": pb_cstable.user_data_size_bits})
     else:
         buff = ""
         # Save to output
@@ -383,17 +451,20 @@ def outputCStrTable(a_data):
         buff += styleKey("Flags", pb_cstable.flags, 25)
         buff += styleKey("String data", pb_cstable.string_data, 25)
         outFile.write(buff)
-    
+
 # CMD 13
 def outputUStrTable(a_data):
     pb_ustrtable = protonet.CSVCMsg_UpdateStringTable()
     pb_ustrtable.ParseFromString(a_data)
     if(SAVE_AS_JSON):
+        isPlayerInfo = False
+        if (TABLE_ARR[pb_ustrtable.table_id]["name"] == "userinfo"):
+            isPlayerInfo = True
         buff = {"comm_nr": 13}
         buff["table_id"]            = pb_ustrtable.table_id
         buff["num_changed_entries"] = pb_ustrtable.num_changed_entries
         if(not SIMPLIFY_DATA):
-            buff["string_data"]         = pb_ustrtable.string_data
+            buff["string_data"]     = preParseStringTable(pb_ustrtable, TABLE_ARR[pb_ustrtable.table_id], isPlayerInfo)
         jsonbuff_tick["commands"].append(buff)
     else:
         buff = ""
@@ -404,7 +475,7 @@ def outputUStrTable(a_data):
         if(not SIMPLIFY_DATA):
             buff += styleKey("String data", pb_ustrtable.string_data, 25)
         outFile.write(buff)
-    
+
 # CMD 14
 def outputVoiceInit(a_data):
     pb_voiceinit = protonet.CSVCMsg_VoiceInit()
@@ -421,7 +492,7 @@ def outputVoiceInit(a_data):
         buff += styleKey("Quality", pb_voiceinit.quality, 10)
         buff += styleKey("Codec", pb_voiceinit.codec, 10)
         outFile.write(buff)
-    
+
 # CMD 17
 def outputSound(a_data):
     pb_sounds = protonet.CSVCMsg_Sounds()
@@ -479,7 +550,7 @@ def outputSound(a_data):
                 buff += styleKey("> Is sentence", i.is_sentence, 25)
                 buff += styleKey("> Is ambient ", i.is_ambient, 25)
         outFile.write(buff)
-   
+
 # CMD 18
 def outputSetView(a_data):
     pb_setview = protonet.CSVCMsg_SetView()
@@ -494,7 +565,7 @@ def outputSetView(a_data):
         buff += "\n##### cmd 18 - Set View\n"
         buff += styleKey("Entity index", pb_setview.entity_index, 15)
         outFile.write(buff)
-    
+
 # CMD 23
 def outputUserMsg(a_data):
     pb_usermsg = protonet.CSVCMsg_UserMessage()
@@ -511,7 +582,7 @@ def outputUserMsg(a_data):
         buff += styleKey("Msg type", pb_usermsg.msg_type, 10)
         buff += styleKey("Msg data", pb_usermsg.msg_data, 10)
         outFile.write(buff)
-    
+
 # CMD 25
 def outputGameEvent(a_data):
     pb_gameevent = protonet.CSVCMsg_GameEvent()
@@ -542,7 +613,7 @@ def outputGameEvent(a_data):
                 buff_i["value"] = i.val_wstring
             buff["keys"].append(buff_i)
         jsonbuff_tick["commands"].append(buff)
-        
+
         # Parse events for simplicity
         if(pb_gameevent.eventid == 7):
             jsonbuff["players"][buff["keys"][2]["value"]] = {"name": buff["keys"][0]["value"]}
@@ -588,7 +659,8 @@ def outputPEntities(a_data):
         buff["update_baseline"] = pb_pentities.update_baseline
         buff["baseline"]        = pb_pentities.baseline
         buff["delta_from"]      = pb_pentities.delta_from
-        if(not SIMPLIFY_DATA):
+        #if(not SIMPLIFY_DATA):
+        if(False):
             buff["entity_data"] = pb_pentities.entity_data
         jsonbuff_tick["commands"].append(buff)
     else:
@@ -604,7 +676,7 @@ def outputPEntities(a_data):
         if (not SIMPLIFY_DATA):
             buff += styleKey("Entity data", pb_pentities.entity_data, 20)
         outFile.write(buff)
-    
+
 # CMD 27
 def outputTEntities(a_data):
     pb_tentities = protonet.CSVCMsg_TempEntities()
@@ -613,7 +685,8 @@ def outputTEntities(a_data):
         buff = {"comm_nr": 27}
         buff["reliable"]    = pb_tentities.reliable
         buff["num_entries"] = pb_tentities.num_entries
-        if(not SIMPLIFY_DATA):
+        #if(not SIMPLIFY_DATA):
+        if(False):
             buff["entity_data"] = pb_tentities.entity_data
         jsonbuff_tick["commands"].append(buff)
     else:
@@ -625,7 +698,7 @@ def outputTEntities(a_data):
         if (not SIMPLIFY_DATA):
             buff += styleKey("Entity data", pb_tentities.entity_data, 15)
         outFile.write(buff)
-    
+
 # CMD 28
 def outputPrefetch(a_data):
     pb_prefetch = protonet.CSVCMsg_Prefetch()
@@ -640,7 +713,7 @@ def outputPrefetch(a_data):
         buff += "\n##### cmd 28 - Prefetch\n"
         buff += styleKey("Sound index", pb_prefetch.sound_index, 15)
         outFile.write(buff)
-    
+
 # CMD 30
 def outputGameEventList(a_data):
     pb_eventlist = protonet.CSVCMsg_GameEventList()
@@ -674,10 +747,11 @@ def outputGameEventList(a_data):
                 buff += styleKey("> Key name", j.name, 10)
             buff += "\n"
         outFile.write(buff)
-    
+
 #------------------------------
 #     WIP
 #------------------------------
+
 def handleStringTable():
     lens = bread_int(4)
     poz = 0
@@ -800,9 +874,9 @@ def handleDemoPacket():
             print(cmd, size)
             print(buffer)
             sys.exit(0)
-            
+
         pos += size
-        
+
 #------------------------------
 #    Main function
 #------------------------------
@@ -829,6 +903,8 @@ if (demoHeader.demofilestamp == csgo.DEMO_HEADER_ID and demoHeader.demoprotocol 
     while not DEMO_FINISHED:
         DEMO_CMD, DEMO_TICK, DEMO_PLAYER_SLOT = readCmdHeader()
         if(PREV_DEMO_TICK != DEMO_TICK):
+            if(DEMO_TICK != 0):
+                print("Decoded: " + str(round(DEMO_TICK/demoHeader.playback_ticks*100, 2))+"%")
             if(PREV_DEMO_TICK != -1):
                 if(PREV_DEMO_TICK < 1000000):
                     jsonbuff["ticks"].append(jsonbuff_tick)
@@ -839,28 +915,29 @@ if (demoHeader.demofilestamp == csgo.DEMO_HEADER_ID and demoHeader.demoprotocol 
             jsonbuff_tick = {"tick": DEMO_TICK, "commands": []}
         if (DEMO_CMD == csgo.dem_signon or DEMO_CMD == csgo.dem_packet):
             handleDemoPacket()
-            
+
         elif (DEMO_CMD == csgo.dem_usercmd):
-            DEMO_FINISHED = True
+            DEMO_FINISHED = True   # Never happend
             print("dem_usercmd")
-            
+
         elif (DEMO_CMD == csgo.dem_stringtables):
+            DEMO_FINISHED = True   # Never happend
             handleStringTable()
             print("dem_stringtables")
-            
+
         elif (DEMO_CMD == csgo.dem_datatables):
             handleDataTable()
             print("dem_datatables")
-            
+
         elif (DEMO_CMD == csgo.dem_consolecmd):
-            DEMO_FINISHED = True
+            DEMO_FINISHED = True    # Never happend
             print("dem_consolecmd")
-            
+
         elif (DEMO_CMD == csgo.dem_stop):
             DEMO_FINISHED = True
             if(SAVE_AS_JSON):
                 json.dump(jsonbuff, outFile)
             print("dem_stop")
-            
+
         elif (DEMO_CMD == csgo.dem_synctick):
             pass

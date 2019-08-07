@@ -1,0 +1,6 @@
+.idea/
+__pycache__/
+protobuf-3.9.0/
+output.txt
+output.json
+test.dem
