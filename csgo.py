@@ -161,7 +161,7 @@ class CBitRead:
     # ---------------------------------------------------------
     # Grab another part of data to buffer
     def grabNext4Bytes(self):
-        if(self.posByte+4 >= len(self.data)):
+        if(self.posByte >= len(self.data)):
             self.bitsFree = 1
             self.dataPart = 0
             self.overflow = True
