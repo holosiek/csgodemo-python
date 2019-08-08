@@ -1,4 +1,5 @@
 import struct
+import netmessages_public_pb2 as protonet
 #-------------------------------------------
 # Demo variables
 DEMO_HEADER_ID   = b'HL2DEMO\x00'
@@ -21,6 +22,7 @@ FLOAT_SIZE = 4
 DEMOCMDINFO_SIZE = 152
 DEMO_HEADER_SIZE = 1072
 
+# ENUMS
 dem_signon       = b'\x01'
 dem_packet       = b'\x02'
 dem_synctick     = b'\x03'
@@ -31,6 +33,18 @@ dem_stop         = b'\x07'
 dem_customdata   = b'\x08'
 dem_stringtables = b'\x09'
 dem_lastcmd      = b'\x09'
+
+up_enterPVS    = 0
+up_leavePVS    = 1
+up_deltaEnt    = 2
+up_preserveEnt = 3
+up_finished    = 4
+up_failed      = 5
+
+fhdr_zero      = 0
+fhdr_leavePVS  = 1
+fhdr_delete    = 2
+fhdr_enterPVS  = 4
 #-------------------------------------------
 def b2int(x):
     return int.from_bytes(x, byteorder="little")
@@ -156,19 +170,37 @@ class struct_democmdinfo:
         for i in self.u:
             i.reset()
 
-class player_info_t:
-    version = 0
-    xuid = 0
+# Flattened prop entry
+class flattenedPropEntry:
+    prop = protonet.CSVCMsg_SendTable().sendprop_t()
+    arrayElementProp = protonet.CSVCMsg_SendTable().sendprop_t()
+
+    def __init__(self, a_prop, a_arrayProp):
+        self.prop             = protonet.CSVCMsg_SendTable().sendprop_t().ParseFromString(a_prop)
+        self.arrayElementProp = protonet.CSVCMsg_SendTable().sendprop_t().ParseFromString(a_arrayProp)
+
+# Server class information
+class serverClass_t:
+    classID = 0
     name = ""
-    userID = 0
-    guid = ""
-    friendsID = 0
-    friendsName = ""
-    fakeplayer = False
-    ishltv = False
-    customFiles = []
+    DTname = ""
+    dataTable = 0
+    flattenedProps = []
+
+# Player information
+class player_info_t:
+    version         = 0
+    xuid            = 0
+    name            = ""
+    userID          = 0
+    guid            = ""
+    friendsID       = 0
+    friendsName     = ""
+    fakeplayer      = False
+    ishltv          = False
+    customFiles     = []
     filesDownloaded = 0
-    entityID = 0
+    entityID        = 0
 
     def parse(self, a_data, a_entry):
         parsed = struct.unpack("2Q128si33sI128s2?3LBi", a_data)
@@ -185,14 +217,15 @@ class player_info_t:
         self.filesDownloaded = [parsed[10], parsed[11], parsed[12], parsed[13]]
         self.entityID = a_entry
 
+# Buffer reader
 class CBitRead:
-    data = ""
+    data      = ""
     dataBytes = 0
-    dataPart = ""
+    dataPart  = ""
 
-    posByte = 0
-    bitsFree = 0
-    overflow = False
+    posByte   = 0
+    bitsFree  = 0
+    overflow  = False
     # ---------------------------------------------------------
     # Grab another part of data to buffer
     def grabNext4Bytes(self):
@@ -209,6 +242,17 @@ class CBitRead:
         self.bitsFree = 32
         self.grabNext4Bytes()
     # ---------------------------------------------------------
+    # Read VAR
+    def readUBitVar(self):
+        ret = self.readUBitLong(6)
+        if(ret & 48 == 16):
+            ret = (ret & 15) |  (self.readUBitLong(4) << 4)
+        elif(ret & 48 == 32):
+            ret = (ret & 15) |  (self.readUBitLong(8) << 4)
+        elif (ret & 48 == 48):
+            ret = (ret & 15) | (self.readUBitLong(28) << 4)
+        return ret
+
     # Read unsigned n-bits
     def readUBitLong(self, a_bits):
         if(self.bitsFree >= a_bits):

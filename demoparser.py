@@ -17,20 +17,24 @@ SAVE_AS_JSON = True
 #    Demo & file variables
 #------------------------------
 
-FILE_BUFFER_POS  = 0       # Position in input file
-DEMO_FINISHED    = False   # Has demo finished?
+FILE_BUFFER_POS    = 0       # Position in input file
+DEMO_FINISHED      = False   # Has demo finished?
 
-DEMO_TICK        = 0       # Tick right now
-DEMO_CMD         = 0       # Command parsed right now
-DEMO_PLAYER_SLOT = 0       # Player slot
+DEMO_TICK          = 0       # Tick right now
+DEMO_CMD           = 0       # Command parsed right now
+DEMO_PLAYER_SLOT   = 0       # Player slot
 
-PREV_DEMO_TICK   = -1      # Previous demo tick, used for json output
+PREV_DEMO_TICK     = -1      # Previous demo tick, used for json output
 
-HAS_ROUND_ON     = False   # Check if round started
-ROUND_NUM        = 1       # Number of the round
+HAS_ROUND_ON       = False   # Check if round started
+ROUND_NUM          = 1       # Number of the round
 
-TABLE_ARR        = []      # Array containing string tables
-PLAYER_LIST      = []      # Array containing player_info_t
+SERVER_CLASS_BITS  = 0       # How many bits has server class
+
+SERVER_CLASSES     = []      # Array containing server classes information
+DATA_TABLE_ARR     = []      # Array containing data tables
+TABLE_ARR          = []      # Array containing string tables
+PLAYER_LIST        = []      # Array containing player_info_t
 
 #------------------------------
 #    Open input and output file
@@ -115,7 +119,7 @@ def b_str(a_bytes):
 
 # Read int32 [the way its compressed]
 def readvarint32(x, pos):
-    result = ""
+    result = 0
     count = 0
     t_pos = pos
     isIt = True
@@ -125,10 +129,9 @@ def readvarint32(x, pos):
             return result, pos
         b = bin(x[t_pos])[2:].zfill(8)
         t_pos += 1
-        result = b[1:] + result
+        result |= int(b[1:], 2) << (7*count)
         count += 1
         isIt = int(b, 2) & 0x80
-    result = int(result, 2)
     return result, t_pos
 
 # Read string [the way its compressed]
@@ -150,15 +153,18 @@ def styleKey(a_name, a_key, a_padding):
     return (a_name+": ").ljust(a_padding) + str(a_key) + "\n"
 
 #------------------------------
-#    Dump String Table
+#    Checkers if exists
 #------------------------------
 
 def ifPlayerExists(a_id):
-    thereIs = False
     for i in PLAYER_LIST:
         if i.entityID == a_id:
             return i
-    return thereIs
+    return False
+
+#------------------------------
+#    Dump String Table
+#------------------------------
 
 def parseStringTable(a_data, a_isPlayerInfo = False):
     resArray = []
@@ -591,6 +597,7 @@ def outputSetView(a_data):
         outFile.write(buff)
 
 # CMD 23
+# #TODO: HANDLE USER MESSAGES
 def outputUserMsg(a_data):
     pb_usermsg = protonet.CSVCMsg_UserMessage()
     pb_usermsg.ParseFromString(a_data)
@@ -683,9 +690,8 @@ def outputPEntities(a_data):
         buff["update_baseline"] = pb_pentities.update_baseline
         buff["baseline"]        = pb_pentities.baseline
         buff["delta_from"]      = pb_pentities.delta_from
-        #if(not SIMPLIFY_DATA):
-        if(False):
-            buff["entity_data"] = pb_pentities.entity_data
+        if(not SIMPLIFY_DATA):
+            buff["entity_data"] = str(pb_pentities)
         jsonbuff_tick["commands"].append(buff)
     else:
         buff = ""
@@ -709,9 +715,8 @@ def outputTEntities(a_data):
         buff = {"comm_nr": 27}
         buff["reliable"]    = pb_tentities.reliable
         buff["num_entries"] = pb_tentities.num_entries
-        #if(not SIMPLIFY_DATA):
-        if(False):
-            buff["entity_data"] = pb_tentities.entity_data
+        if(not SIMPLIFY_DATA):
+            buff["entity_data"] = str(pb_tentities.entity_data)
         jsonbuff_tick["commands"].append(buff)
     else:
         buff = ""
@@ -789,24 +794,47 @@ def handleStringTable():
     #         word, poz = readString(data, poz)
             #print(numstrings)
 def handleDataTable():
+    global SERVER_CLASS_BITS
     lens = bread_int(4)
     poz = 0
     data = bread(lens)
-    pb_sendtable = protonet.CSVCMsg_SendTable()
     if(SAVE_AS_JSON):
         buff = {}
         while True:
             typed, poz = readvarint32(data, poz)
-            size, poz = readvarint32(data, poz)
+            size, poz  = readvarint32(data, poz) #TODO ReadFromBuffer has more possiblities of size
+            pb_sendtable = protonet.CSVCMsg_SendTable()
             pb_sendtable.ParseFromString(data[poz:poz+size])
-            if (pb_sendtable.is_end):
+            if(pb_sendtable.is_end):
                 break
             poz += size
+            DATA_TABLE_ARR.append(pb_sendtable)
+        serverClasses = csgo.b2int(data[poz:poz+2])
+        poz += 2
+        for i in range(serverClasses):
+            entry = csgo.serverClass_t()
+            entry.classID = csgo.b2int(data[poz:poz+2])
+            poz += 2
+            entry.name, poz   = readString(data, poz)
+            entry.DTname, poz = readString(data, poz)
+            entry.dataTable = -1
+            for ind, j in enumerate(DATA_TABLE_ARR):
+                if(j.net_table_name == entry.DTname):
+                    entry.dataTable = ind
+                    break
+            SERVER_CLASSES.append(entry)
+        #TODO Flattendatatable
+        serverClasses >>= 1
+        while(serverClasses):
+            SERVER_CLASS_BITS += 1
+            serverClasses >>= 1
+        SERVER_CLASS_BITS += 1
     else:
         outFile.write("#### Data Table" + "\n")
         while True:
             typed, poz = readvarint32(data, poz)
             size, poz = readvarint32(data, poz)
+            pb_sendtable = protonet.CSVCMsg_SendTable()
             pb_sendtable.ParseFromString(data[poz:poz+size])
             if(PRINT_DATATABLE):
                 outFile.write("Is end: ".ljust(20) + str(pb_sendtable.is_end) + "\n")
@@ -825,6 +853,7 @@ def handleDataTable():
             if(pb_sendtable.is_end):
                 break
             poz += size
+        #TODO make this same like json has
 
 #------------------------------
 #     Handle Demo Packet
